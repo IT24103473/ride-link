@@ -28,7 +28,10 @@ spring:
           enabled: true
           max-attempts: 3
   jackson:
-    default-property-inclusion: non_null
+    # Nulls are serialised rather than omitted. A documented-nullable field such as
+    # a ride's driverId must come back as null, not vanish: an absent field leaves a
+    # client unable to tell "no driver yet" from a misspelled field name.
+    default-property-inclusion: always
 
 server:
   port: 8084

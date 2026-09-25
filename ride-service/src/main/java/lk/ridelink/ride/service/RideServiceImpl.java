@@ -17,8 +17,7 @@ import lk.ridelink.ride.dto.CreateRideRequest;
 import lk.ridelink.ride.dto.RideResponse;
 import lk.ridelink.ride.dto.RideStatusHistoryResponse;
 import lk.ridelink.ride.exception.ActiveRideExistsException;
-import lk.ridelink.ride.exception.BusinessRuleException;
-import lk.ridelink.ride.exception.ErrorCodes;
+import lk.ridelink.ride.exception.InvalidRequestException;
 import lk.ridelink.ride.exception.NoDriverAvailableException;
 import lk.ridelink.ride.exception.NotFoundException;
 import lk.ridelink.ride.mapper.RideMapper;
@@ -103,9 +102,9 @@ public class RideServiceImpl implements RideService {
         Location destination = mapper.toLocation(request.destination());
 
         // A zero-distance ride would travel nowhere and bill only the minimum fare.
+        // 400 rather than 422: no state of the system would ever accept this request.
         if (pickup.isSamePlaceAs(destination)) {
-            throw new BusinessRuleException(ErrorCodes.VALIDATION_FAILED,
-                    "Pickup and destination must be different places");
+            throw new InvalidRequestException("Pickup and destination must be different places");
         }
 
         Ride ride = Ride.request(passengerId, pickup, destination, request.vehicleType(),

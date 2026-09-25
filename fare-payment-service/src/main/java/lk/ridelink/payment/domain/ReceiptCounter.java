@@ -14,6 +14,10 @@ import jakarta.persistence.Table;
  *
  * <p>Rows are read with a pessimistic lock when allocating, so two concurrent payments
  * cannot be issued the same receipt number.</p>
+ *
+ * <p>Neither column can take its obvious name: {@code YEAR} is reserved in H2, which the
+ * tests run against, and {@code LAST_VALUE} is reserved in MySQL 8, where it is a window
+ * function. The column names are chosen to be legal in both.</p>
  */
 @Entity
 @Table(name = "receipt_counter")
@@ -27,7 +31,11 @@ public class ReceiptCounter {
     @Column(name = "counter_year", nullable = false, updatable = false)
     private int year;
 
-    @Column(name = "last_value", nullable = false)
+    /**
+     * Column is {@code last_issued}, not {@code last_value}: LAST_VALUE is a reserved word
+     * in MySQL 8, where it is a window function.
+     */
+    @Column(name = "last_issued", nullable = false)
     private long lastValue;
 
     protected ReceiptCounter() {

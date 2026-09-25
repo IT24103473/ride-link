@@ -1,8 +1,7 @@
 package lk.ridelink.payment.service;
 
 import lk.ridelink.payment.domain.FailureReason;
-import lk.ridelink.payment.exception.BusinessRuleException;
-import lk.ridelink.payment.exception.ErrorCodes;
+import lk.ridelink.payment.exception.InvalidRequestException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -28,13 +27,12 @@ public class SimulatedCardGateway {
      *
      * @param cardToken one of the three supported placeholders
      * @return the outcome; {@link Outcome#failureReason()} is null on success
-     * @throws BusinessRuleException for an unrecognised token - a 400, because the request
+     * @throws InvalidRequestException for an unrecognised token - a 400, because the request
      *         itself is wrong, as distinct from a genuine decline which is a 402
      */
     public Outcome authorise(String cardToken) {
         if (cardToken == null || cardToken.isBlank()) {
-            throw new BusinessRuleException(ErrorCodes.VALIDATION_FAILED,
-                    "A cardToken is required when paying by CARD");
+            throw new InvalidRequestException("A cardToken is required when paying by CARD");
         }
 
         return switch (cardToken) {
@@ -43,7 +41,7 @@ public class SimulatedCardGateway {
             case TOKEN_INSUFFICIENT_FUNDS -> Outcome.failure(FailureReason.INSUFFICIENT_FUNDS);
             // An unknown token is a malformed request, not a declined card: it must not
             // leave a FAILED payment or an attempt record behind.
-            default -> throw new BusinessRuleException(ErrorCodes.VALIDATION_FAILED,
+            default -> throw new InvalidRequestException(
                     "Unknown cardToken. Supported simulated tokens are: "
                             + TOKEN_SUCCESS + ", " + TOKEN_DECLINED + ", " + TOKEN_INSUFFICIENT_FUNDS);
         };

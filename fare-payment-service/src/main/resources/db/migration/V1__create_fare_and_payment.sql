@@ -26,7 +26,7 @@ CREATE TABLE fare_estimate (
     minimum_fare         DECIMAL(10,2) NOT NULL,
     minimum_fare_applied BOOLEAN       NOT NULL DEFAULT FALSE,
     total                DECIMAL(10,2) NOT NULL,
-    currency             CHAR(3)       NOT NULL,
+    currency             VARCHAR(3)    NOT NULL,
     created_at           DATETIME(6)   NOT NULL,
     -- Quotes expire, so a passenger cannot present an old price after a tariff change.
     expires_at           DATETIME(6)   NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE final_fare (
     minimum_fare         DECIMAL(10,2) NOT NULL,
     minimum_fare_applied BOOLEAN       NOT NULL DEFAULT FALSE,
     total                DECIMAL(10,2) NOT NULL,
-    currency             CHAR(3)       NOT NULL,
+    currency             VARCHAR(3)    NOT NULL,
     created_at           DATETIME(6)   NOT NULL,
     CONSTRAINT pk_final_fare PRIMARY KEY (id),
     -- One fare per ride: a redelivered ride.completed cannot create a second.
@@ -65,7 +65,7 @@ CREATE TABLE payment (
     final_fare_id  CHAR(36)      NOT NULL,
     type           VARCHAR(20)   NOT NULL,
     amount         DECIMAL(10,2) NOT NULL,
-    currency       CHAR(3)       NOT NULL,
+    currency       VARCHAR(3)    NOT NULL,
     -- CASH | CARD
     method         VARCHAR(10)   NOT NULL,
     -- PENDING | FAILED | SUCCEEDED
@@ -103,9 +103,11 @@ CREATE INDEX idx_attempt_payment ON payment_attempt (payment_id, attempted_at);
 -- Receipt numbering. A table rather than a sequence: sequences differ between MySQL and
 -- H2, and numbering restarts each year, which a plain sequence cannot express.
 CREATE TABLE receipt_counter (
-    -- Not "year": YEAR is a reserved word in H2, which the tests run against.
+    -- Neither column can take its obvious name: YEAR is reserved in H2 (which the tests
+    -- run against) and LAST_VALUE is reserved in MySQL 8 (it is a window function). The
+    -- names below are chosen to be legal in both.
     counter_year INT    NOT NULL,
-    last_value   BIGINT NOT NULL DEFAULT 0,
+    last_issued  BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT pk_receipt_counter PRIMARY KEY (counter_year)
 );
 

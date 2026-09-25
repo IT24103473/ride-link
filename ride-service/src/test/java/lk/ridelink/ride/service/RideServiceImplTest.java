@@ -31,7 +31,7 @@ import lk.ridelink.ride.dto.CreateRideRequest;
 import lk.ridelink.ride.dto.LocationRequest;
 import lk.ridelink.ride.dto.RideResponse;
 import lk.ridelink.ride.exception.ActiveRideExistsException;
-import lk.ridelink.ride.exception.BusinessRuleException;
+import lk.ridelink.ride.exception.InvalidRequestException;
 import lk.ridelink.ride.exception.DownstreamUnavailableException;
 import lk.ridelink.ride.exception.InvalidRideTransitionException;
 import lk.ridelink.ride.exception.NoDriverAvailableException;
@@ -149,7 +149,7 @@ class RideServiceImplTest {
 
         // A zero-distance ride would travel nowhere and bill only the minimum fare.
         assertThatThrownBy(() -> rideService.requestRide(request))
-                .isInstanceOf(BusinessRuleException.class)
+                .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("different places");
     }
 

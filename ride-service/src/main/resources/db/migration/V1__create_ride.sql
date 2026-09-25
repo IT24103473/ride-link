@@ -29,7 +29,7 @@ CREATE TABLE ride (
     estimated_fare        DECIMAL(10,2) NULL,
     estimated_distance_km DECIMAL(8,2)  NULL,
     estimated_duration_min INT          NULL,
-    currency              CHAR(3)       NULL,
+    currency              VARCHAR(3)    NULL,
 
     requested_at          DATETIME(6)   NOT NULL,
     assigned_at           DATETIME(6)   NULL,

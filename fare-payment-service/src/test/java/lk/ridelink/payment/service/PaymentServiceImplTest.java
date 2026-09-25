@@ -22,7 +22,7 @@ import lk.ridelink.payment.domain.PaymentStatus;
 import lk.ridelink.payment.domain.VehicleType;
 import lk.ridelink.payment.dto.PayRequest;
 import lk.ridelink.payment.dto.PaymentResponse;
-import lk.ridelink.payment.exception.BusinessRuleException;
+import lk.ridelink.payment.exception.InvalidRequestException;
 import lk.ridelink.payment.exception.NotFoundException;
 import lk.ridelink.payment.exception.PaymentAlreadyCompletedException;
 import lk.ridelink.payment.exception.PaymentDeclinedException;
@@ -194,7 +194,7 @@ class PaymentServiceImplTest {
 
         assertThatThrownBy(() -> paymentService.pay(payment.getId(),
                 new PayRequest(PaymentMethod.CARD, "tok_made_up")))
-                .isInstanceOf(BusinessRuleException.class);
+                .isInstanceOf(InvalidRequestException.class);
 
         // The distinction matters: a malformed request is not a declined card, so it must
         // not leave a FAILED payment, an attempt record or an event.
@@ -211,7 +211,7 @@ class PaymentServiceImplTest {
 
         assertThatThrownBy(() -> paymentService.pay(payment.getId(),
                 new PayRequest(PaymentMethod.CARD, null)))
-                .isInstanceOf(BusinessRuleException.class);
+                .isInstanceOf(InvalidRequestException.class);
     }
 
     // --- Retry --------------------------------------------------------------
