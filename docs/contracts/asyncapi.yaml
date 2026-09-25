@@ -1,0 +1,407 @@
+asyncapi: '2.6.0'
+
+info:
+  title: RideLink Events
+  version: '1.0.0'
+  description: |
+    Machine-readable contract for every RabbitMQ message exchanged between the four
+    RideLink services. The human-readable companion is `events.md`, which also records
+    the consumer behaviour expected for each event.
+
+    All messages are published to the durable topic exchange `ridelink.events` and
+    share a common envelope; only `payload` differs per event.
+  license:
+    name: Coursework (IT3130, SLIIT)
+
+defaultContentType: application/json
+
+servers:
+  local:
+    url: amqp://localhost:5672
+    protocol: amqp
+    description: Local RabbitMQ from docker-compose.yml
+
+channels:
+  account.driver.registered:
+    description: A new account with role DRIVER has been registered.
+    publish:
+      operationId: publishDriverRegistered
+      summary: Published by Account Service.
+      message:
+        $ref: '#/components/messages/DriverRegistered'
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: ridelink.events
+          type: topic
+          durable: true
+
+  account.status.changed:
+    description: An account moved between ACTIVE, SUSPENDED and DEACTIVATED.
+    publish:
+      operationId: publishAccountStatusChanged
+      summary: Published by Account Service.
+      message:
+        $ref: '#/components/messages/AccountStatusChanged'
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: ridelink.events
+          type: topic
+          durable: true
+
+  ride.completed:
+    description: A driver marked a ride COMPLETED.
+    publish:
+      operationId: publishRideCompleted
+      summary: Published by Ride Management Service.
+      message:
+        $ref: '#/components/messages/RideCompleted'
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: ridelink.events
+          type: topic
+          durable: true
+
+  ride.cancelled:
+    description: A ride was cancelled by the passenger, the driver or an admin.
+    publish:
+      operationId: publishRideCancelled
+      summary: Published by Ride Management Service.
+      message:
+        $ref: '#/components/messages/RideCancelled'
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: ridelink.events
+          type: topic
+          durable: true
+
+  payment.succeeded:
+    description: A simulated payment completed successfully.
+    publish:
+      operationId: publishPaymentSucceeded
+      summary: Published by Fare and Payment Service.
+      message:
+        $ref: '#/components/messages/PaymentSucceeded'
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: ridelink.events
+          type: topic
+          durable: true
+
+  payment.failed:
+    description: A simulated payment was declined.
+    publish:
+      operationId: publishPaymentFailed
+      summary: Published by Fare and Payment Service.
+      message:
+        $ref: '#/components/messages/PaymentFailed'
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: ridelink.events
+          type: topic
+          durable: true
+
+components:
+  schemas:
+    Envelope:
+      type: object
+      required: [eventId, eventType, version, occurredAt, payload]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+          description: Unique per publication; consumers persist it for idempotency.
+        eventType:
+          type: string
+          description: Equal to the routing key.
+        version:
+          type: integer
+          default: 1
+        occurredAt:
+          type: string
+          format: date-time
+          description: When the fact happened (UTC), not when it was published.
+        correlationId:
+          type: string
+          format: uuid
+          description: Carried from the originating request's X-Correlation-Id.
+        payload:
+          type: object
+
+    Location:
+      type: object
+      required: [name, lat, lng]
+      properties:
+        name:
+          type: string
+          example: Colombo Fort
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 6.9344
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: 79.8428
+
+    VehicleType:
+      type: string
+      enum: [TUK, CAR, VAN]
+
+    PaymentMethod:
+      type: string
+      enum: [CASH, CARD]
+
+    DriverRegisteredPayload:
+      type: object
+      required: [accountId, fullName, email, phone]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+          example: Nimal Perera
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          description: Sri Lankan mobile number in international format.
+          example: '+94771234567'
+
+    AccountStatusChangedPayload:
+      type: object
+      required: [accountId, role, oldStatus, newStatus]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [PASSENGER, DRIVER, ADMIN]
+        oldStatus:
+          type: string
+          enum: [ACTIVE, SUSPENDED, DEACTIVATED]
+        newStatus:
+          type: string
+          enum: [ACTIVE, SUSPENDED, DEACTIVATED]
+
+    RideCompletedPayload:
+      type: object
+      required:
+        - rideId
+        - passengerId
+        - driverId
+        - vehicleType
+        - pickup
+        - destination
+        - estimatedDistanceKm
+        - startedAt
+        - completedAt
+        - paymentMethod
+      properties:
+        rideId:
+          type: string
+          format: uuid
+        passengerId:
+          type: string
+          format: uuid
+        driverId:
+          type: string
+          format: uuid
+        vehicleType:
+          $ref: '#/components/schemas/VehicleType'
+        pickup:
+          $ref: '#/components/schemas/Location'
+        destination:
+          $ref: '#/components/schemas/Location'
+        estimatedDistanceKm:
+          type: number
+          format: double
+          example: 41.6
+        actualDistanceKm:
+          type: number
+          format: double
+          description: Optional; absent when the driver reported no distance.
+          example: 43.2
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        fareEstimateId:
+          type: string
+          format: uuid
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+
+    RideCancelledPayload:
+      type: object
+      required:
+        - rideId
+        - passengerId
+        - previousStatus
+        - cancelledBy
+        - cancelledAt
+        - vehicleType
+        - paymentMethod
+      properties:
+        rideId:
+          type: string
+          format: uuid
+        passengerId:
+          type: string
+          format: uuid
+        driverId:
+          type: string
+          format: uuid
+          description: Absent when the ride was cancelled while still REQUESTED.
+        previousStatus:
+          type: string
+          enum: [REQUESTED, ASSIGNED, ACCEPTED]
+          description: Status held immediately before cancellation; drives the fee rule.
+        cancelledBy:
+          type: string
+          enum: [PASSENGER, DRIVER, ADMIN]
+        cancelledAt:
+          type: string
+          format: date-time
+        vehicleType:
+          $ref: '#/components/schemas/VehicleType'
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+
+    PaymentSucceededPayload:
+      type: object
+      required: [paymentId, rideId, amount, currency, receiptNumber, paidAt]
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+        rideId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+          example: 4485.00
+        currency:
+          type: string
+          default: LKR
+        receiptNumber:
+          type: string
+          description: Sequential receipt number in the form RL-<year>-<6 digits>.
+          example: RL-2026-000123
+        paidAt:
+          type: string
+          format: date-time
+
+    PaymentFailedPayload:
+      type: object
+      required: [paymentId, rideId, amount, currency, failureReason]
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+        rideId:
+          type: string
+          format: uuid
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+          default: LKR
+        failureReason:
+          type: string
+          enum: [CARD_DECLINED, INSUFFICIENT_FUNDS]
+
+  messages:
+    DriverRegistered:
+      name: DriverRegistered
+      title: account.driver.registered
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                $ref: '#/components/schemas/DriverRegisteredPayload'
+
+    AccountStatusChanged:
+      name: AccountStatusChanged
+      title: account.status.changed
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                $ref: '#/components/schemas/AccountStatusChangedPayload'
+
+    RideCompleted:
+      name: RideCompleted
+      title: ride.completed
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                $ref: '#/components/schemas/RideCompletedPayload'
+
+    RideCancelled:
+      name: RideCancelled
+      title: ride.cancelled
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                $ref: '#/components/schemas/RideCancelledPayload'
+
+    PaymentSucceeded:
+      name: PaymentSucceeded
+      title: payment.succeeded
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                $ref: '#/components/schemas/PaymentSucceededPayload'
+
+    PaymentFailed:
+      name: PaymentFailed
+      title: payment.failed
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            properties:
+              payload:
+                $ref: '#/components/schemas/PaymentFailedPayload'
