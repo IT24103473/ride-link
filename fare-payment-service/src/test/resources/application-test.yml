@@ -1,0 +1,34 @@
+# Test profile: no MySQL and no RabbitMQ required, so CI stays fast and hermetic.
+spring:
+  config:
+    import: ""              # never read the developer's real .env during tests
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop  # tests build the schema directly; Flyway is off
+    open-in-view: false
+  flyway:
+    enabled: false
+  rabbitmq:
+    listener:
+      simple:
+        auto-startup: false  # no broker in CI, so do not try to consume
+
+ridelink:
+  security:
+    # TEST-ONLY dummy secret. Not a credential; never used outside tests.
+    jwt-secret: test-only-secret-key-not-a-real-credential-32b
+  fare:
+    currency: LKR
+    road-winding-factor: 1.3
+    average-speed-kmh: 25
+    estimate-validity-minutes: 15
+    cancellation-fee: 100.00
+  tariffs:
+    TUK: { base: 100.00, per-km: 80.00, per-min: 3.00, minimum: 200.00 }
+    CAR: { base: 150.00, per-km: 100.00, per-min: 5.00, minimum: 300.00 }
+    VAN: { base: 250.00, per-km: 140.00, per-min: 7.00, minimum: 500.00 }

@@ -1,0 +1,63 @@
+spring:
+  config:
+    import: optional:file:../.env[.properties]
+  application:
+    name: driver-vehicle-service
+  datasource:
+    url: ${DRIVER_DB_URL:jdbc:mysql://localhost:3306/ridelink_driver}
+    username: ${DRIVER_DB_USERNAME}
+    password: ${DRIVER_DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+    listener:
+      simple:
+        default-requeue-rejected: false   # rejected messages go to the DLQ
+        retry:
+          enabled: true
+          max-attempts: 3
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: 8082
+  error:
+    include-message: always
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+ridelink:
+  security:
+    jwt-secret: ${JWT_SECRET}
+  matching:
+    default-radius-km: 5
+    max-radius-km: 20
+    default-limit: 5
+    # A driver whose location is older than this is treated as stale and skipped.
+    location-freshness-minutes: 30
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{correlationId:-}] %logger{36} - %msg%n"

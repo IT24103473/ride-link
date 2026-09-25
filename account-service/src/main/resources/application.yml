@@ -1,0 +1,61 @@
+spring:
+  config:
+    # Importing the root .env lets `mvnw spring-boot:run` work without exporting
+    # variables by hand. It is optional so CI (which sets nothing) still starts.
+    import: optional:file:../.env[.properties]
+  application:
+    name: account-service
+  datasource:
+    url: ${ACCOUNT_DB_URL:jdbc:mysql://localhost:3306/ridelink_account}
+    username: ${ACCOUNT_DB_USERNAME}
+    password: ${ACCOUNT_DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: validate      # Flyway owns the schema; Hibernate only checks it
+    open-in-view: false
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: 8081
+  error:
+    include-message: always
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+ridelink:
+  security:
+    jwt-secret: ${JWT_SECRET}
+    jwt-ttl-minutes: ${JWT_TTL_MINUTES:60}
+    service-token-ttl-minutes: 10
+  admin:
+    email: ${ADMIN_EMAIL:admin@ridelink.test}
+    password: ${ADMIN_PASSWORD:}
+  # Service clients allowed to request a SERVICE-role token (client credentials).
+  service-clients:
+    ride-service: ${RIDE_SERVICE_CLIENT_SECRET:}
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{correlationId:-}] %logger{36} - %msg%n"
