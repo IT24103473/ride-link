@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# Local infrastructure only: MySQL 8 and RabbitMQ.
+# The four Spring Boot services are run from the IDE or with `mvnw
+# spring-boot:run` (see README). Containerising the services themselves is
+# optional and unmarked for this assignment, so it is deliberately left out to
+# keep the setup simple and the feedback loop fast.
+# ---------------------------------------------------------------------------
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: ridelink-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      ACCOUNT_DB_USERNAME: ${ACCOUNT_DB_USERNAME:?}
+      ACCOUNT_DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:?}
+      DRIVER_DB_USERNAME: ${DRIVER_DB_USERNAME:?}
+      DRIVER_DB_PASSWORD: ${DRIVER_DB_PASSWORD:?}
+      RIDE_DB_USERNAME: ${RIDE_DB_USERNAME:?}
+      RIDE_DB_PASSWORD: ${RIDE_DB_PASSWORD:?}
+      PAYMENT_DB_USERNAME: ${PAYMENT_DB_USERNAME:?}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # The .sh runs on first start; the .sql is only its template, so it is
+      # mounted outside initdb.d to stop MySQL executing it verbatim.
+      - ./infra/mysql/init.sh:/docker-entrypoint-initdb.d/01-ridelink-init.sh:ro
+      - ./infra/mysql/init.sql:/opt/ridelink/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: ridelink-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI - http://localhost:15672
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?set RABBITMQ_USERNAME in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  mysql-data:
+  rabbitmq-data:
