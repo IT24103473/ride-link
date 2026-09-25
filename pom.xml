@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>lk.ridelink</groupId>
+    <artifactId>ridelink</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>RideLink</name>
+    <description>
+        Aggregator only. This POM exists so `./mvnw verify` at the repository root builds
+        all four services in one command. It is deliberately NOT a parent POM: each service
+        inherits from spring-boot-starter-parent directly so it stays a standalone,
+        independently buildable and deployable Spring Boot application.
+    </description>
+
+    <modules>
+        <module>account-service</module>
+        <module>driver-vehicle-service</module>
+        <module>ride-service</module>
+        <module>fare-payment-service</module>
+    </modules>
+</project>
