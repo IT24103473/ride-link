@@ -28,6 +28,11 @@ is discussed in the report.
 
 ---
 
+> **New to the project?** [`docs/getting-started.md`](docs/getting-started.md) is a
+> step-by-step walkthrough from a fresh clone to a working demo, with a troubleshooting
+> table keyed by the exact error you will see. The sections below are the condensed
+> version.
+
 ## 2. Prerequisites
 
 | Tool | Version | Notes |
@@ -195,6 +200,7 @@ Full rationale: [`docs/architecture.md`](docs/architecture.md) and
 
 | Document | What is in it |
 |---|---|
+| [`docs/getting-started.md`](docs/getting-started.md) | Fresh-clone setup, step by step, with troubleshooting |
 | [`docs/architecture.md`](docs/architecture.md) | Decomposition, data ownership, interaction styles and trade-offs |
 | [`docs/business-rules.md`](docs/business-rules.md) | State machine, driver matching, fare and cancellation rules |
 | [`docs/contracts/events.md`](docs/contracts/events.md) | Event catalogue — the source of truth for messaging |
