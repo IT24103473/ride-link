@@ -1,0 +1,2766 @@
+{
+  "info": {
+    "_postman_id": "c3a9e17b-52d4-4f8a-9b21-7d0e4c6a2100",
+    "name": "RideLink",
+    "description": "End-to-end workflows for RideLink, with assertions on every request.\n\nRun the folders in order: later folders depend on ids and tokens the earlier ones store in the environment.\n\nStart all four services first (account, driver, fare-payment, ride) with MySQL and RabbitMQ running.\n\nnewman run postman/RideLink.postman_collection.json -e postman/RideLink.local.postman_environment.json",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 Setup",
+      "description": "Creates everything the later folders need: an admin session, two passengers and two drivers. A per-run id is appended to every e-mail so the collection can be run repeatedly against the same database without colliding.",
+      "item": [
+        {
+          "name": "Admin login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "The admin is seeded at startup from ADMIN_EMAIL / ADMIN_PASSWORD. If this fails with 401, the .env values do not match the running service.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh id per run keeps e-mail addresses unique, so the whole",
+                  "// collection can be re-run without wiping the database.",
+                  "pm.environment.set(\"runId\", Date.now());",
+                  "pm.environment.set(\"pollAttempts\", 0);",
+                  "pm.environment.set(\"feePollAttempts\", 0);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"A token and the ADMIN role come back\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.accessToken).to.be.a(\"string\").and.not.empty;",
+                  "    pm.expect(body.tokenType).to.eql(\"Bearer\");",
+                  "    pm.expect(body.role).to.eql(\"ADMIN\");",
+                  "    pm.environment.set(\"adminToken\", body.accessToken);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register passenger P1",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/register/passenger"
+            },
+            "description": "The role comes from the endpoint, never from the body.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Nimal Perera\",\n  \"email\": \"p1.{{runId}}@ridelink.test\",\n  \"phone\": \"+94771234501\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"Created as an ACTIVE passenger\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.role).to.eql(\"PASSENGER\");",
+                  "    pm.expect(body.status).to.eql(\"ACTIVE\");",
+                  "    pm.environment.set(\"p1Id\", body.id);",
+                  "});",
+                  "pm.test(\"The password hash is never returned\", function () {",
+                  "    pm.expect(pm.response.json()).to.not.have.property(\"passwordHash\");",
+                  "});",
+                  "pm.test(\"Location header points at the new account\", function () {",
+                  "    pm.expect(pm.response.headers.get(\"Location\")).to.include(\"/api/v1/accounts/\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register passenger P2",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/register/passenger"
+            },
+            "description": "A second passenger, used later to prove one passenger cannot read another's ride.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Sunil Fernando\",\n  \"email\": \"p2.{{runId}}@ridelink.test\",\n  \"phone\": \"+94771234502\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.environment.set(\"p2Id\", pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register driver D1 (CAR)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/register/driver"
+            },
+            "description": "Publishes account.driver.registered, which makes the Driver service create a PENDING profile shell. That profile is read in folder 02.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Kamal Silva\",\n  \"email\": \"d1.{{runId}}@ridelink.test\",\n  \"phone\": \"+94771234511\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"Created as a driver\", function () {",
+                  "    pm.expect(pm.response.json().role).to.eql(\"DRIVER\");",
+                  "    pm.environment.set(\"d1Id\", pm.response.json().id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register driver D2 (TUK)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/register/driver"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Ruwan Jayasuriya\",\n  \"email\": \"d2.{{runId}}@ridelink.test\",\n  \"phone\": \"+94771234512\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.environment.set(\"d2Id\", pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login P1",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"p1.{{runId}}@ridelink.test\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Token belongs to P1\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.accountId).to.eql(pm.environment.get(\"p1Id\"));",
+                  "    pm.environment.set(\"p1Token\", body.accessToken);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login P2",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"p2.{{runId}}@ridelink.test\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.environment.set(\"p2Token\", pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login D1",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"d1.{{runId}}@ridelink.test\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.environment.set(\"d1Token\", pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login D2",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"d2.{{runId}}@ridelink.test\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.environment.set(\"d2Token\", pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 Account and access",
+      "description": "Profile self-service and the admin-only account administration, including a suspension and its reversal.",
+      "item": [
+        {
+          "name": "P1 reads own profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/accounts/me"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Returns P1 and no password hash\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.id).to.eql(pm.environment.get(\"p1Id\"));",
+                  "    pm.expect(body).to.not.have.property(\"passwordHash\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P1 updates own profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/accounts/me"
+            },
+            "description": "Only name and phone are changeable. E-mail is the login identifier and role is an authorisation decision, so neither is accepted here.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Nimal J Perera\",\n  \"phone\": \"+94719999501\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Name and phone changed, e-mail and role did not\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.fullName).to.eql(\"Nimal J Perera\");",
+                  "    pm.expect(body.phone).to.eql(\"+94719999501\");",
+                  "    pm.expect(body.role).to.eql(\"PASSENGER\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin lists drivers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/accounts?role=DRIVER&page=0&size=20&sort=createdAt,desc"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"A page of drivers comes back\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"content\");",
+                  "    pm.expect(body.content).to.be.an(\"array\");",
+                  "    body.content.forEach(a => pm.expect(a.role).to.eql(\"DRIVER\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin suspends P2",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/accounts/{{p2Id}}/status"
+            },
+            "description": "Publishes account.status.changed. For a driver this would also force them offline in the Driver service.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"SUSPENDED\",\n  \"reason\": \"Demonstrating suspension\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"P2 is now SUSPENDED\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"SUSPENDED\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Suspended P2 cannot log in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "403 rather than 401: the credentials were correct, so retrying will not help.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"p2.{{runId}}@ridelink.test\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Error code is ACCOUNT_SUSPENDED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"ACCOUNT_SUSPENDED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin reactivates P2",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/accounts/{{p2Id}}/status"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\",\n  \"reason\": \"Appeal upheld\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"P2 is ACTIVE again\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"ACTIVE\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P2 can log in again",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/login"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"p2.{{runId}}@ridelink.test\",\n  \"password\": \"{{testPassword}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.environment.set(\"p2Token\", pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Driver preparation",
+      "description": "Everything a driver must do before they can be matched: vehicle, licence, service area, location, admin verification, then going online. The 422 in the middle shows the eligibility rule refusing an unverified driver and listing why.",
+      "item": [
+        {
+          "name": "D1 reads profile (created by the event)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me"
+            },
+            "description": "This profile was not created by any request in this collection. It was created by the Driver service consuming account.driver.registered from folder 00, which is the first proof that the messaging works."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"A PENDING, OFFLINE shell exists\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.driverId).to.eql(pm.environment.get(\"d1Id\"));",
+                  "    pm.expect(body.verificationStatus).to.eql(\"PENDING\");",
+                  "    pm.expect(body.availability).to.eql(\"OFFLINE\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D1 cannot go online yet",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/availability"
+            },
+            "description": "Negative case: nothing has been set up yet, so this lists every unmet requirement at once rather than failing on the first.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"availability\": \"AVAILABLE\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", function () { pm.response.to.have.status(422); });",
+                  "pm.test(\"Error code is DRIVER_NOT_ELIGIBLE\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"DRIVER_NOT_ELIGIBLE\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});",
+                  "pm.test(\"Every unmet requirement is listed\", function () {",
+                  "    const reasons = pm.response.json().reasons;",
+                  "    pm.expect(reasons).to.be.an(\"array\").that.is.not.empty;",
+                  "    pm.expect(reasons.join(\" \")).to.include(\"verification status\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D1 adds a CAR",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/vehicles"
+            },
+            "description": "The first vehicle a driver registers is activated automatically.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"registrationNumber\": \"WP CAB-{{runId}}\",\n  \"type\": \"CAR\",\n  \"make\": \"Toyota\",\n  \"model\": \"Axio\",\n  \"colour\": \"Silver\",\n  \"seats\": 4,\n  \"year\": 2018\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"Registered and auto-activated\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.type).to.eql(\"CAR\");",
+                  "    pm.expect(body.active).to.be.true;",
+                  "    pm.environment.set(\"d1VehicleId\", body.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D1 sets licence and area",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"licenceNumber\": \"B1234501\",\n  \"licenceExpiry\": \"2030-12-31\",\n  \"serviceArea\": \"NEGOMBO\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Licence and area stored\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.serviceArea).to.eql(\"NEGOMBO\");",
+                  "    pm.expect(body.licenceExpiry).to.eql(\"2030-12-31\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D1 reports location (Negombo)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/location"
+            },
+            "description": "Close to the pickup point used in folder 04. A position older than 30 minutes is treated as stale and excludes the driver from matching.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 7.21,\n  \"lng\": 79.838\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Position and timestamp recorded\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.currentLat).to.eql(7.21);",
+                  "    pm.expect(body.locationUpdatedAt).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin verifies D1",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/{{d1Id}}/verification"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"VERIFIED\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"D1 is VERIFIED\", function () {",
+                  "    pm.expect(pm.response.json().verificationStatus).to.eql(\"VERIFIED\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D1 goes online",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/availability"
+            },
+            "description": "Now every requirement is met, so the same call that returned 422 succeeds.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"availability\": \"AVAILABLE\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"AVAILABLE, with availableSince stamped for the ranking tie-break\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.availability).to.eql(\"AVAILABLE\");",
+                  "    pm.expect(body.availableSince).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2 adds a TUK",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/vehicles"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"registrationNumber\": \"WP TUK-{{runId}}\",\n  \"type\": \"TUK\",\n  \"make\": \"Bajaj\",\n  \"model\": \"RE\",\n  \"colour\": \"Green\",\n  \"seats\": 3,\n  \"year\": 2020\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.environment.set(\"d2VehicleId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2 sets licence and area",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"licenceNumber\": \"B1234502\",\n  \"licenceExpiry\": \"2030-12-31\",\n  \"serviceArea\": \"NEGOMBO\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2 reports location",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/location"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 7.205,\n  \"lng\": 79.84\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin verifies D2",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/{{d2Id}}/verification"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"VERIFIED\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D2 goes online",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/availability"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"availability\": \"AVAILABLE\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 Fare estimation",
+      "description": "Quotes for two vehicle classes, and the published tariff rule. The CAR quote is checked against the documented formula rather than a hard-coded number.",
+      "item": [
+        {
+          "name": "Get the published tariffs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/fares/tariffs"
+            },
+            "description": "Publishing the rule through the API means a client can always explain a price it was quoted. The values come from the same configuration the calculator reads."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"All three vehicle classes and the formula are published\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.currency).to.eql(\"LKR\");",
+                  "    pm.expect(body.formula).to.be.a(\"string\").and.not.empty;",
+                  "    pm.expect(body.tariffs).to.have.lengthOf(3);",
+                  "    const types = body.tariffs.map(t => t.vehicleType);",
+                  "    pm.expect(types).to.have.members([\"TUK\", \"CAR\", \"VAN\"]);",
+                  "});",
+                  "pm.test(\"Cancellation fee is published\", function () {",
+                  "    pm.expect(Number(pm.response.json().cancellationFee)).to.eql(100);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P1 estimates a CAR fare",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/fares/estimates"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"destination\": {\n    \"name\": \"Katunayake\",\n    \"lat\": 7.1697,\n    \"lng\": 79.8842\n  },\n  \"vehicleType\": \"CAR\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"Quote has a full breakdown and an expiry\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.currency).to.eql(\"LKR\");",
+                  "    pm.expect(body.expiresAt).to.not.be.null;",
+                  "    pm.expect(Number(body.breakdown.total)).to.be.above(0);",
+                  "    pm.environment.set(\"estimateId\", body.id);",
+                  "});",
+                  "pm.test(\"The breakdown matches the documented formula\", function () {",
+                  "    const b = pm.response.json().breakdown;",
+                  "    // total = max(base + perKm x distance + perMin x duration, minimum)",
+                  "    const computed = Number(b.baseFare) + Number(b.distanceFare) + Number(b.timeFare);",
+                  "    const expected = b.minimumFareApplied ? Number(b.minimumFare) : computed;",
+                  "    pm.expect(Number(b.total)).to.be.closeTo(expected, 0.01);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P1 estimates a TUK fare",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/fares/estimates"
+            },
+            "description": "Same journey, cheaper class. Proves the tariff actually varies by vehicle.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"destination\": {\n    \"name\": \"Katunayake\",\n    \"lat\": 7.1697,\n    \"lng\": 79.8842\n  },\n  \"vehicleType\": \"TUK\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"A TUK is priced for the same journey\", function () {",
+                  "    pm.expect(pm.response.json().vehicleType).to.eql(\"TUK\");",
+                  "    pm.expect(Number(pm.response.json().breakdown.total)).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P1 reads the quote back",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/fares/estimates/{{estimateId}}"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Same quote comes back\", function () {",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"estimateId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P2 cannot read P1's quote",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/fares/estimates/{{estimateId}}"
+            },
+            "description": "Negative case: a quote reveals where someone intended to travel."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Error code is FORBIDDEN\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Ride happy path",
+      "description": "The full lifecycle: request, assignment, accept, start, complete, then the status history that records every step.",
+      "item": [
+        {
+          "name": "P1 requests a ride",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides"
+            },
+            "description": "The Ride service calls the Fare service synchronously and snapshots the quote onto the ride, fixing the price for the life of the trip.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"destination\": {\n    \"name\": \"Katunayake\",\n    \"lat\": 7.1697,\n    \"lng\": 79.8842\n  },\n  \"vehicleType\": \"CAR\",\n  \"serviceArea\": \"NEGOMBO\",\n  \"paymentMethod\": \"CARD\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.test(\"Ride is REQUESTED with a fare snapshot\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"REQUESTED\");",
+                  "    pm.expect(body.driverId).to.be.null;",
+                  "    pm.expect(body.paymentStatus).to.eql(\"NOT_DUE\");",
+                  "    // Proof that the synchronous call to the Fare service happened.",
+                  "    pm.expect(body.fareEstimateId).to.not.be.null;",
+                  "    pm.expect(Number(body.estimatedFare)).to.be.above(0);",
+                  "    pm.environment.set(\"rideId\", body.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P1 cannot request a second ride",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides"
+            },
+            "description": "Negative case: a passenger can only be in one vehicle at a time.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"destination\": {\n    \"name\": \"Katunayake\",\n    \"lat\": 7.1697,\n    \"lng\": 79.8842\n  },\n  \"vehicleType\": \"CAR\",\n  \"serviceArea\": \"NEGOMBO\",\n  \"paymentMethod\": \"CASH\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 409\", function () { pm.response.to.have.status(409); });",
+                  "pm.test(\"Error code is ACTIVE_RIDE_EXISTS\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"ACTIVE_RIDE_EXISTS\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Assign a driver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}/assignment"
+            },
+            "description": "The Ride service obtains a SERVICE token from Account, asks Driver for ranked candidates and reserves them in order until one succeeds."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"A driver was reserved\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"ASSIGNED\");",
+                  "    pm.expect(body.driverId).to.not.be.null;",
+                  "    pm.expect(body.assignedAt).to.not.be.null;",
+                  "    pm.environment.set(\"assignedDriverId\", body.driverId);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The assigned driver is now BUSY",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me"
+            },
+            "description": "Confirms the reservation actually changed the driver's state, and that BUSY carries the ride id."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"D1 is BUSY on this ride\", function () {",
+                  "    const body = pm.response.json();",
+                  "    if (body.driverId === pm.environment.get(\"assignedDriverId\")) {",
+                  "        pm.expect(body.availability).to.eql(\"BUSY\");",
+                  "        pm.expect(body.currentRideId).to.eql(pm.environment.get(\"rideId\"));",
+                  "    } else {",
+                  "        pm.expect(body.availability).to.eql(\"AVAILABLE\");",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Driver accepts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}/accept"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"ASSIGNED to ACCEPTED\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"ACCEPTED\");",
+                  "    pm.expect(body.acceptedAt).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Driver starts the trip",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}/start"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"ACCEPTED to IN_PROGRESS\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"IN_PROGRESS\");",
+                  "    pm.expect(pm.response.json().startedAt).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "P2 cannot read P1's ride",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}"
+            },
+            "description": "Negative case: only the passenger, the assigned driver and an admin may read a ride."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Error code is FORBIDDEN\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Driver completes the trip",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}/complete"
+            },
+            "description": "Publishes ride.completed. That one event releases the driver and triggers the final fare, so this request does not wait on either service.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actualDistanceKm\": 6.4\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"IN_PROGRESS to COMPLETED, payment now pending\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"COMPLETED\");",
+                  "    pm.expect(body.completedAt).to.not.be.null;",
+                  "    pm.expect(body.paymentStatus).to.eql(\"PENDING\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ride status history",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}/history"
+            },
+            "description": "The ride row holds only the current status; this is what makes the whole journey reconstructable."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Every transition was recorded in order\", function () {",
+                  "    const history = pm.response.json();",
+                  "    pm.expect(history).to.be.an(\"array\");",
+                  "    const statuses = history.map(h => h.toStatus);",
+                  "    pm.expect(statuses).to.include.members(",
+                  "        [\"REQUESTED\", \"ASSIGNED\", \"ACCEPTED\", \"IN_PROGRESS\", \"COMPLETED\"]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Driver is free again",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me"
+            },
+            "description": "Released by the ride.completed consumer, not by any request here. If this fails, check RabbitMQ is running."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// The release happens on an event, so allow it a moment to arrive.",
+                  "const until = Date.now() + 1500;",
+                  "while (Date.now() < until) { /* deliberate wait for the consumer */ }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Not BUSY any more\", function () {",
+                  "    pm.expect(pm.response.json().availability).to.not.eql(\"BUSY\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 Completion and payment",
+      "description": "Polls until the event-driven final fare exists, pays by card, fetches the receipt, and confirms the ride's own payment status caught up via payment.succeeded.",
+      "item": [
+        {
+          "name": "Poll for the final fare",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/rides/{{rideId}}"
+            },
+            "description": "Returns 404 PAYMENT_NOT_READY until the ride.completed event has been consumed. This request retries itself up to ten times - the visible face of eventual consistency, and the reason the code is distinct from a plain NOT_FOUND."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Brief pause between polls so the retries span a sensible window.",
+                  "const until = Date.now() + 700;",
+                  "while (Date.now() < until) { /* deliberate wait */ }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const attempts = Number(pm.environment.get(\"pollAttempts\") || 0);",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.environment.set(\"pollAttempts\", 0);",
+                  "    pm.test(\"The final fare and a PENDING payment exist\", function () {",
+                  "        const body = pm.response.json();",
+                  "        pm.expect(body.finalFare).to.not.be.null;",
+                  "        pm.expect(body.payment.status).to.eql(\"PENDING\");",
+                  "        pm.expect(Number(body.finalFare.breakdown.total)).to.be.above(0);",
+                  "        pm.environment.set(\"paymentId\", body.payment.id);",
+                  "    });",
+                  "    pm.test(\"The final fare used the distance the driver reported\", function () {",
+                  "        // 6.4 km was reported on completion, in place of the estimate.",
+                  "        pm.expect(Number(pm.response.json().finalFare.breakdown.distanceKm)).to.eql(6.4);",
+                  "    });",
+                  "} else if (pm.response.code === 404 && attempts < 10) {",
+                  "    // Expected while the ride.completed event is still in flight. The distinct",
+                  "    // PAYMENT_NOT_READY code is what tells a client to retry rather than give up.",
+                  "    pm.expect(pm.response.json().code).to.eql(\"PAYMENT_NOT_READY\");",
+                  "    pm.environment.set(\"pollAttempts\", attempts + 1);",
+                  "    postman.setNextRequest(\"Poll for the final fare\");",
+                  "} else {",
+                  "    pm.environment.set(\"pollAttempts\", 0);",
+                  "    pm.test(\"The payment became ready within the retry budget\", function () {",
+                  "        pm.expect.fail(\"Still not ready after \" + attempts +",
+                  "            \" attempts. Is RabbitMQ running and the payment service consuming?\");",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pay by card",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/{{paymentId}}/pay"
+            },
+            "description": "tok_success is a fixed placeholder that selects a simulated outcome. No card data is accepted or stored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"CARD\",\n  \"cardToken\": \"tok_success\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Paid, with a receipt number allocated\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"SUCCEEDED\");",
+                  "    pm.expect(body.paidAt).to.not.be.null;",
+                  "    pm.expect(body.receiptNumber).to.match(/^RL-\\d{4}-\\d{6}$/);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Paying again is refused",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/{{paymentId}}/pay"
+            },
+            "description": "Negative case: a double submission must be visible, not silently charge twice.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"CARD\",\n  \"cardToken\": \"tok_success\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 409\", function () { pm.response.to.have.status(409); });",
+                  "pm.test(\"Error code is PAYMENT_ALREADY_COMPLETED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"PAYMENT_ALREADY_COMPLETED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get the receipt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/{{paymentId}}/receipt"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Receipt carries the number, amount and breakdown\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.receiptNumber).to.match(/^RL-\\d{4}-\\d{6}$/);",
+                  "    pm.expect(Number(body.amountPaid)).to.be.above(0);",
+                  "    pm.expect(body.currency).to.eql(\"LKR\");",
+                  "    pm.expect(body.breakdown).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The ride shows PAID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}"
+            },
+            "description": "Updated by the payment.succeeded consumer, which closes the loop: a payment made in one service is visible in another without either calling the other."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Allow the payment.succeeded event to reach the ride service.",
+                  "const until = Date.now() + 1500;",
+                  "while (Date.now() < until) { /* deliberate wait for the consumer */ }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"paymentStatus caught up to PAID\", function () {",
+                  "    pm.expect(pm.response.json().paymentStatus).to.eql(\"PAID\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 Negative scenarios",
+      "description": "The failure paths. These matter as much as the happy path: each one proves a rule is actually enforced rather than merely documented.",
+      "item": [
+        {
+          "name": "(a) No driver available (VAN in GALLE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides"
+            },
+            "description": "Set-up for (a): no VAN driver exists in GALLE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Galle Fort\",\n    \"lat\": 6.0269,\n    \"lng\": 80.2168\n  },\n  \"destination\": {\n    \"name\": \"Unawatuna\",\n    \"lat\": 6.01,\n    \"lng\": 80.25\n  },\n  \"vehicleType\": \"VAN\",\n  \"serviceArea\": \"GALLE\",\n  \"paymentMethod\": \"CASH\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.environment.set(\"noDriverRideId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(a) Assignment finds nobody",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{noDriverRideId}}/assignment"
+            },
+            "description": "409, and crucially the ride stays REQUESTED so the passenger can retry rather than having to book again."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 409\", function () { pm.response.to.have.status(409); });",
+                  "pm.test(\"Error code is NO_DRIVER_AVAILABLE\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"NO_DRIVER_AVAILABLE\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(a) The ride is still REQUESTED",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{noDriverRideId}}"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Not cancelled - still retryable\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"REQUESTED\");",
+                  "    pm.expect(pm.response.json().driverId).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(a) Clean up: cancel it",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{noDriverRideId}}/cancel"
+            },
+            "description": "Frees P2 for the later scenarios, since a passenger may hold only one active ride. Cancelled from REQUESTED, so no fee is due.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"No driver available in this area\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Cancelled by the passenger\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"CANCELLED\");",
+                  "    pm.expect(pm.response.json().cancelledBy).to.eql(\"PASSENGER\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(b) Cannot cancel a completed ride",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{rideId}}/cancel"
+            },
+            "description": "COMPLETED is terminal. This is the state machine refusing an illegal transition rather than a validation rule.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Trying to cancel a finished trip\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 409\", function () { pm.response.to.have.status(409); });",
+                  "pm.test(\"Error code is INVALID_RIDE_TRANSITION\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"INVALID_RIDE_TRANSITION\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});",
+                  "pm.test(\"The message names both states\", function () {",
+                  "    const detail = pm.response.json().detail;",
+                  "    pm.expect(detail).to.include(\"COMPLETED\");",
+                  "    pm.expect(detail).to.include(\"CANCELLED\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(c) Passenger cannot reserve a driver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/internal/drivers/{{d1Id}}/reserve"
+            },
+            "description": "The security boundary that matters most: internal endpoints need a SERVICE token. Without this, any user could mark the whole fleet BUSY and halt the platform.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rideId\": \"{{rideId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Error code is FORBIDDEN\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(c) No token at all is 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/internal/drivers/{{d1Id}}/reserve"
+            },
+            "description": "401 rather than 403: unauthenticated, not merely unauthorised.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rideId\": \"{{rideId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 401\", function () { pm.response.to.have.status(401); });",
+                  "pm.test(\"Error code is UNAUTHENTICATED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"UNAUTHENTICATED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(c) A driver cannot reserve either",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d1Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/internal/drivers/{{d1Id}}/reserve"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rideId\": \"{{rideId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", function () { pm.response.to.have.status(403); });",
+                  "pm.test(\"Error code is FORBIDDEN\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(d) Invalid e-mail is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/register/passenger"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Bad Input\",\n  \"email\": \"not-an-email\",\n  \"phone\": \"+94771234599\",\n  \"password\": \"Passw0rd123\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Error code is VALIDATION_FAILED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"VALIDATION_FAILED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});",
+                  "pm.test(\"The offending field is named\", function () {",
+                  "    pm.expect(pm.response.json().errors).to.have.property(\"email\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(d) Several bad fields are all reported",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{accountUrl}}/api/v1/auth/register/passenger"
+            },
+            "description": "Reporting every problem at once saves the client four round trips.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"X\",\n  \"email\": \"bad\",\n  \"phone\": \"0771234567\",\n  \"password\": \"short\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Error code is VALIDATION_FAILED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"VALIDATION_FAILED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});",
+                  "pm.test(\"All four fields are reported together\", function () {",
+                  "    const errors = pm.response.json().errors;",
+                  "    pm.expect(errors).to.have.property(\"fullName\");",
+                  "    pm.expect(errors).to.have.property(\"email\");",
+                  "    pm.expect(errors).to.have.property(\"phone\");",
+                  "    pm.expect(errors).to.have.property(\"password\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(d) Pickup cannot equal destination",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides"
+            },
+            "description": "A zero-distance ride would travel nowhere and bill only the minimum fare.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"destination\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"vehicleType\": \"CAR\",\n  \"serviceArea\": \"NEGOMBO\",\n  \"paymentMethod\": \"CASH\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Error code is VALIDATION_FAILED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"VALIDATION_FAILED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(d) Latitude out of range",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{driverUrl}}/api/v1/drivers/me/location"
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 120.0,\n  \"lng\": 79.8358\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(f) P2 requests a ride",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides"
+            },
+            "description": "Set-up for (f): the cancellation fee applies only from ACCEPTED, so this ride has to be taken all the way to a driver accepting it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup\": {\n    \"name\": \"Negombo\",\n    \"lat\": 7.2083,\n    \"lng\": 79.8358\n  },\n  \"destination\": {\n    \"name\": \"Katunayake\",\n    \"lat\": 7.1697,\n    \"lng\": 79.8842\n  },\n  \"vehicleType\": \"TUK\",\n  \"serviceArea\": \"NEGOMBO\",\n  \"paymentMethod\": \"CARD\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 201\", function () { pm.response.to.have.status(201); });",
+                  "pm.environment.set(\"feeRideId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(f) Assign a driver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{feeRideId}}/assignment"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Assigned\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"ASSIGNED\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(f) D2 accepts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{d2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{feeRideId}}/accept"
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"ACCEPTED - a driver has now committed\", function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(\"ACCEPTED\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(f) P2 cancels after acceptance",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{rideUrl}}/api/v1/rides/{{feeRideId}}/cancel"
+            },
+            "description": "PASSENGER cancelling from ACCEPTED is the one combination that incurs a fee, because a driver had already committed and begun travelling.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Changed my mind after the driver set off\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Cancelled by the passenger, from ACCEPTED\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"CANCELLED\");",
+                  "    pm.expect(body.cancelledBy).to.eql(\"PASSENGER\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(f) Poll for the cancellation fee",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/rides/{{feeRideId}}"
+            },
+            "description": "Charged by the ride.cancelled consumer applying the documented rule."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const until = Date.now() + 700;",
+                  "while (Date.now() < until) { /* deliberate wait for the consumer */ }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const attempts = Number(pm.environment.get(\"feePollAttempts\") || 0);",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.environment.set(\"feePollAttempts\", 0);",
+                  "    pm.test(\"A cancellation fee of LKR 100.00 was charged\", function () {",
+                  "        const body = pm.response.json();",
+                  "        pm.expect(body.finalFare.type).to.eql(\"CANCELLATION_FEE\");",
+                  "        pm.expect(Number(body.payment.amount)).to.eql(100);",
+                  "        pm.expect(body.payment.status).to.eql(\"PENDING\");",
+                  "        // The (e) card scenarios settle this payment.",
+                  "        pm.environment.set(\"feePaymentId\", body.payment.id);",
+                  "    });",
+                  "} else if (pm.response.code === 404 && attempts < 10) {",
+                  "    pm.environment.set(\"feePollAttempts\", attempts + 1);",
+                  "    postman.setNextRequest(\"(f) Poll for the cancellation fee\");",
+                  "} else {",
+                  "    pm.environment.set(\"feePollAttempts\", 0);",
+                  "    pm.test(\"The cancellation fee appeared within the retry budget\", function () {",
+                  "        pm.expect.fail(\"No fee after \" + attempts + \" attempts.\");",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(e) Card declined",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/{{feePaymentId}}/pay"
+            },
+            "description": "402, not 400: the request was fine and was processed, the card was not. The payment stays FAILED and can be retried.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"CARD\",\n  \"cardToken\": \"tok_declined\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 402\", function () { pm.response.to.have.status(402); });",
+                  "pm.test(\"Error code is PAYMENT_DECLINED\", function () {",
+                  "    pm.expect(pm.response.json().code).to.eql(\"PAYMENT_DECLINED\");",
+                  "});",
+                  "pm.test(\"Error body has the shared RFC 7807 shape\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property(\"status\");",
+                  "    pm.expect(body).to.have.property(\"detail\");",
+                  "    pm.expect(body).to.have.property(\"timestamp\");",
+                  "    pm.expect(body).to.have.property(\"path\");",
+                  "});",
+                  "pm.test(\"The response invites a retry\", function () {",
+                  "    pm.expect(pm.response.json().detail.toLowerCase()).to.include(\"retry\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(e) Unknown card token is a 400, not a decline",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/{{feePaymentId}}/pay"
+            },
+            "description": "A malformed request is not a declined card: it must not leave a failed payment or an attempt record behind.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"CARD\",\n  \"cardToken\": \"tok_made_up\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "(e) Retry succeeds",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{p2Token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{fareUrl}}/api/v1/payments/{{feePaymentId}}/pay"
+            },
+            "description": "FAILED is not terminal. Each attempt was recorded separately, which is what makes a disputed charge explainable.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"CARD\",\n  \"cardToken\": \"tok_success\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Now paid, and the stale failure reason is cleared\", function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql(\"SUCCEEDED\");",
+                  "    pm.expect(body.receiptNumber).to.match(/^RL-\\d{4}-\\d{6}$/);",
+                  "    pm.expect(body.failureReason).to.be.oneOf([null, undefined]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
