@@ -1,7 +1,9 @@
 package lk.ridelink.payment;
 
+import lk.ridelink.payment.config.RideLinkProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 /**
  * Fare &amp; Payment Service - owns money.
@@ -11,6 +13,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * No real payment provider is contacted; card tokens are fixed placeholders.</p>
  */
 @SpringBootApplication
+@EnableConfigurationProperties(RideLinkProperties.class)
 public class FarePaymentServiceApplication {
 
     public static void main(String[] args) {
