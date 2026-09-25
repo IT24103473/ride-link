@@ -1,0 +1,17 @@
+# Normalise line endings so the repo behaves identically on Windows and Linux.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Shell scripts MUST stay LF: init.sh runs inside the Linux MySQL container and
+# mvnw runs under bash/CI. CRLF here produces a "bad interpreter" failure.
+*.sh text eol=lf
+mvnw text eol=lf
+
+# Never touch binaries.
+*.jar binary
+*.png binary
+*.jpg binary
+*.pdf binary
